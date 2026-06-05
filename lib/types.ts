@@ -1,4 +1,4 @@
-import { type ParsedUrlQuery } from 'node:querystring'
+type ParsedUrlQuery = Record<string, string | string[] | undefined>;
 
 import { type ExtendedRecordMap, type PageMap } from 'notion-types'
 
