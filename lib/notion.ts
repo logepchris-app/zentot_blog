@@ -1,75 +1,42 @@
-import {
-  type ExtendedRecordMap,
-  type SearchParams,
-  type SearchResults
-} from 'notion-types'
-import { mergeRecordMaps } from 'notion-utils'
-import pMap from 'p-map'
-import pMemoize from 'p-memoize'
+import { Client } from "@notionhq/client";
 
-import {
-  isPreviewImageSupportEnabled,
-  navigationLinks,
-  navigationStyle
-} from './config'
-import { getTweetsMap } from './get-tweets'
-import { notion } from './notion-api'
-import { getPreviewImageMap } from './preview-images'
+const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
-const getNavigationLinkPages = pMemoize(
-  async (): Promise<ExtendedRecordMap[]> => {
-    const navigationLinkPageIds = (navigationLinks || [])
-      .map((link) => link?.pageId)
-      .filter(Boolean)
+// Ορίζουμε τον τύπο για να έχουμε καθαρό TypeScript
+export type BlogPost = {
+  id: string;
+  title: string;
+  slug: string;
+  tags: string[];
+  coverImage: string | null;
+  date: string;
+};
 
-    if (navigationStyle !== 'default' && navigationLinkPageIds.length) {
-      return pMap(
-        navigationLinkPageIds,
-        async (navigationLinkPageId) =>
-          notion.getPage(navigationLinkPageId, {
-            chunkLimit: 1,
-            fetchMissingBlocks: false,
-            fetchCollections: false,
-            signFileUrls: false
-          }),
-        {
-          concurrency: 4
-        }
-      )
-    }
+export async function getPosts(): Promise<BlogPost[]> {
+  const databaseId = process.env.NOTION_DATABASE_ID!;
 
-    return []
-  }
-)
+  const response = await notion.databases.query({
+    database_id: databaseId,
+    filter: {
+      property: "Published",
+      checkbox: { equals: true },
+    },
+    sorts: [{ property: "Date", direction: "descending" }],
+  });
 
-export async function getPage(pageId: string): Promise<ExtendedRecordMap> {
-  let recordMap = await notion.getPage(pageId)
+  // Εδώ "καθαρίζουμε" το JSON του Notion
+  const posts = response.results.map((post: any) => {
+    return {
+      id: post.id,
+      title: post.properties.Name.title[0]?.plain_text || "Χωρίς Τίτλο",
+      slug: post.properties.Slug.rich_text[0]?.plain_text || "",
+      // Μαζεύουμε όλα τα tags (π.χ. destinations, airplane tips)
+      tags: post.properties.Tags.multi_select.map((tag: any) => tag.name),
+      // To Notion έχει δύο τύπους εικόνων: ανέβασμα ή εξωτερικό link
+      coverImage: post.cover?.external?.url || post.cover?.file?.url || null,
+      date: post.properties.Date?.date?.start || "",
+    };
+  });
 
-  if (navigationStyle !== 'default') {
-    // ensure that any pages linked to in the custom navigation header have
-    // their block info fully resolved in the page record map so we know
-    // the page title, slug, etc.
-    const navigationLinkRecordMaps = await getNavigationLinkPages()
-
-    if (navigationLinkRecordMaps?.length) {
-      recordMap = navigationLinkRecordMaps.reduce(
-        (map, navigationLinkRecordMap) =>
-          mergeRecordMaps(map, navigationLinkRecordMap),
-        recordMap
-      )
-    }
-  }
-
-  if (isPreviewImageSupportEnabled) {
-    const previewImageMap = await getPreviewImageMap(recordMap)
-    ;(recordMap as any).preview_images = previewImageMap
-  }
-
-  await getTweetsMap(recordMap)
-
-  return recordMap
-}
-
-export async function search(params: SearchParams): Promise<SearchResults> {
-  return notion.search(params)
+  return posts;
 }
